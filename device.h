@@ -16,7 +16,11 @@ int battery_get_capacity();
 
 int light_get_max();
 
+int lcd_bright_get();
+
 void light_set(int bright);
+
+void light_breathe();
 
 void power_sleep(long time);
 
@@ -27,5 +31,7 @@ void power_unlock(const char *reason);
 void vibrator_set(int status);
 
 void lcd_bright_set(int bright);
+
+void lcd_gradient(int sw, int limit);
 
 #endif/*_DEVICE_H_*/

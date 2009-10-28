@@ -144,6 +144,24 @@ void light_set(int bright)
     return;
 }
 
+void light_breathe(int orient)
+{
+    int max = light_get_max();
+    int i = 0;
+
+    for (i = 0; i < max; i++)
+    {
+        light_set(i);
+        usleep(max - i);
+    }
+
+    for (i = max; i > 0; i--)
+    {
+        light_set(i);
+        usleep(max - i);
+    }
+}
+
 void power_sleep(long time)
 {
     hw_file_write(DEV_POWER_STATE, "mem");
@@ -168,6 +186,21 @@ void vibrator_set(int status)
     hw_file_write(DEV_VIBRATOR, buf);
 }
 
+int lcd_bright_get()
+{
+    int bright = 0;
+
+    char *text = hw_file_read(DEV_LCD_BRIGHT, 16);
+
+    if (text)
+    {
+        bright = atoi(text);
+        free(text);
+    }
+
+    return bright;
+}
+
 void lcd_bright_set(int bright)
 {
     char buf[BUF_LEN_MAX];
@@ -175,5 +208,27 @@ void lcd_bright_set(int bright)
     sprintf(buf, "%d", bright);
 
     hw_file_write(DEV_LCD_BRIGHT, buf);
+}
+
+void lcd_gradient(int sw, int limit)
+{
+    int i = 0;
+
+    if (sw)
+    {
+        for (i = 0; i <= limit; i++)
+        {
+            lcd_bright_set(i);
+            usleep(10 * 1000);
+        }
+    }
+    else
+    {
+        for (i = limit; i >= 0; i--)
+        {
+            lcd_bright_set(i);
+            usleep(10 * 1000);
+        }
+    }
 }
 
