@@ -4,18 +4,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <sys/socket.h>
+#include <linux/netlink.h>
 
-#define DEV_BATTERY_STATUS      "/sys/class/power_supply/battery/status"
-#define DEV_BATTERY_CAPACITY    "/sys/class/power_supply/battery/capacity"
-#define DEV_LIGHT_BRIGHT_MAX    "/sys/class/backlight/pxa3xx_pwm_bl2/max_brightness"
-#define DEV_LIGHT_BRIGHT        "/sys/class/backlight/pxa3xx_pwm_bl2/brightness"
-#define DEV_POWER_STATE         "/sys/power/state"
-#define DEV_POWER_LOCK          "/sys/power/wake_lock"
-#define DEV_POWER_UNLOCK        "/sys/power/wake_unlock"
-#define DEV_VIBRATOR            "/sys/class/timed_output/vibrator/enable"
-#define DEV_LCD_BRIGHT          "/sys/class/backlight/micco-bl/brightness"
-
-#define BUF_LEN_MAX             256
+#define BUF_LEN_MAX     256
 
 char *hw_file_read(const char *file, size_t len)
 {
@@ -51,6 +44,20 @@ char *hw_file_read(const char *file, size_t len)
     return NULL;
 }
 
+int hw_file_read_int(const char *file, size_t len)
+{
+    char *text = hw_file_read(file, len);
+    int value = 0;
+
+    if (text)
+    {
+        value = atoi(text);
+        free(text);
+    }
+
+    return value;
+}
+
 int hw_file_write(const char *file, const char *content)
 {
     ssize_t size;
@@ -67,6 +74,46 @@ int hw_file_write(const char *file, const char *content)
     close(fd);
 
     return size;
+}
+
+int hw_file_write_int(const char *file, int value)
+{
+    char buf[BUF_LEN_MAX];
+
+    sprintf(buf, "%d", value);
+
+    return hw_file_write(file, buf);
+}
+
+int open_hotplug_socket()
+{
+    struct sockaddr_nl snl;
+    const int size = BUF_LEN_MAX;
+    int ret;
+
+    bzero(&snl, sizeof(struct sockaddr_nl));
+    snl.nl_family = AF_NETLINK;
+    snl.nl_pid = getpid();
+    snl.nl_groups = 1;
+
+    int s = socket(PF_NETLINK, SOCK_DGRAM, NETLINK_KOBJECT_UEVENT);
+    if (s == -1) 
+    {
+        perror("socket");
+        return -1;
+    }
+
+    setsockopt(s, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size));
+
+    ret = bind(s, (struct sockaddr *)&snl, sizeof(struct sockaddr_nl));
+    if (ret < 0) 
+    {
+        perror("bind");
+        close(s);
+        return -1;
+    }
+
+    return s;
 }
 
 int battery_get_status()
@@ -105,61 +152,108 @@ int battery_get_status()
 
 int battery_get_capacity()
 {
-    int capacity = 0;
+    return hw_file_read_int(DEV_BATTERY_CAPACITY, 16);
+}
 
-    char *text = hw_file_read(DEV_BATTERY_CAPACITY, 16);
+int lcd_bright_get()
+{
+    return hw_file_read_int(DEV_LCD_BRIGHT, 16);
+}
 
-    if (text)
+void lcd_bright_set(int bright)
+{
+    hw_file_write_int(DEV_LCD_BRIGHT, bright);
+}
+
+void lcd_gradient(int sw, int limit)
+{
+    int interval = 500000 / limit;
+    int i = 0;
+
+    if (sw)
     {
-        capacity = atoi(text);
-        free(text);
+        for (i = limit / 2; i <= limit; i++)
+        {
+            lcd_bright_set(i);
+            usleep(interval);
+        }
+    }
+    else
+    {
+        for (i = limit; i >= 0; i--)
+        {
+            lcd_bright_set(i);
+            usleep(interval);
+        }
+    }
+}
+
+void led_bright_set(const char *name, int value)
+{
+    char device[PATH_MAX];
+
+    snprintf(device, PATH_MAX, DEV_LED_PATH"/%s/brightness", name);
+
+    hw_file_write_int(device, value);
+}
+
+void led_blink_set(const char *name, int set)
+{
+    char device[PATH_MAX];
+
+    if (set == 0)
+    {
+        led_bright_set(name, 0);
+        return;
     }
 
-    return capacity;
+    snprintf(device, PATH_MAX, DEV_LED_PATH"/%s/trigger", name);
+    hw_file_write(device, "timer");
+
+    snprintf(device, PATH_MAX, DEV_LED_PATH"/%s/brightness", name);
+    hw_file_write_int(device, DEV_LED_FULL);
+
+    snprintf(device, PATH_MAX, DEV_LED_PATH"/%s/delay_on", name);
+    hw_file_write_int(device, 1000);
+
+    snprintf(device, PATH_MAX, DEV_LED_PATH"/%s/delay_off", name);
+    hw_file_write_int(device, 1000);
+
+    return;
 }
 
 int light_get_max()
 {
-    int max = 0;
-
-    char *text = hw_file_read(DEV_LIGHT_BRIGHT_MAX, 16);
-
-    if (text)
-    {
-        max = atoi(text);
-        free(text);
-    }
-
-    return max;
+    return DEV_LED_FULL;
 }
 
 void light_set(int bright)
 {
-    char text[16];
-
-    snprintf(text, 16, "%d", bright);
-
-    hw_file_write(DEV_LIGHT_BRIGHT, text);
-
-    return;
+    hw_file_write_int(DEV_LIGHT_BRIGHT, bright);
 }
 
 void light_breathe(int orient)
 {
     int max = light_get_max();
+    int interval = 1000000 / max;
     int i = 0;
 
     for (i = 0; i < max; i++)
     {
         light_set(i);
-        usleep(max - i);
+        usleep(interval);
     }
 
     for (i = max; i > 0; i--)
     {
         light_set(i);
-        usleep(max - i);
+        usleep(interval);
     }
+}
+
+void vibrator_set(int status)
+{
+    hw_file_write_int(DEV_VIBRATOR, status);
 }
 
 void power_sleep(long time)
@@ -175,60 +269,5 @@ void power_lock(const char *reason)
 void power_unlock(const char *reason)
 {
     hw_file_write(DEV_POWER_UNLOCK, reason);
-}
-
-void vibrator_set(int status)
-{
-    char buf[BUF_LEN_MAX];
-
-    sprintf(buf, "%d", status);
-
-    hw_file_write(DEV_VIBRATOR, buf);
-}
-
-int lcd_bright_get()
-{
-    int bright = 0;
-
-    char *text = hw_file_read(DEV_LCD_BRIGHT, 16);
-
-    if (text)
-    {
-        bright = atoi(text);
-        free(text);
-    }
-
-    return bright;
-}
-
-void lcd_bright_set(int bright)
-{
-    char buf[BUF_LEN_MAX];
-
-    sprintf(buf, "%d", bright);
-
-    hw_file_write(DEV_LCD_BRIGHT, buf);
-}
-
-void lcd_gradient(int sw, int limit)
-{
-    int i = 0;
-
-    if (sw)
-    {
-        for (i = 0; i <= limit; i++)
-        {
-            lcd_bright_set(i);
-            usleep(10 * 1000);
-        }
-    }
-    else
-    {
-        for (i = limit; i >= 0; i--)
-        {
-            lcd_bright_set(i);
-            usleep(10 * 1000);
-        }
-    }
 }
 
