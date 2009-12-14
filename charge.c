@@ -1,3 +1,6 @@
+#undef LOG_TAG
+#define LOG_TAG "Charge"
+
 #include "framebuffer.h"
 #include "gifdecode.h"
 #include "device.h"
@@ -9,6 +12,7 @@
 #include <pthread.h>
 #include <sys/socket.h>
 #include <sys/reboot.h>
+#include <cutils/log.h>
 
 #define CHARGE_ANIMATION    "/system/usr/share/charge/battery.gif"
 #define CHARGE_WAKE_LOCK    "charge"
@@ -26,6 +30,14 @@ struct _ChargeContext
 };
 
 static ChargeContext charge_ctx;
+
+static void power_off()
+{
+#ifdef HAVE_ANDROID_OS
+    sync();
+    reboot(RB_POWER_OFF);
+#endif
+}
 
 static void update_animation(int status)
 {
@@ -57,6 +69,12 @@ static void *hotplug_thread(void *arg)
 {
     int hotplug_sock = open_hotplug_socket();
 
+    if (hotplug_sock < 0)
+    {
+        LOGE("open_hotplug_socket fail, ret=%d", hotplug_sock);
+        return NULL;
+    }
+
     while(1)
     {
         char buf[4096] = {0};
@@ -64,10 +82,7 @@ static void *hotplug_thread(void *arg)
 
         if (strncmp(buf, "remove", strlen("remove")) == 0)
         {
-#ifdef HAVE_ANDROID_OS
-            sync();
-            reboot(RB_POWER_OFF);
-#endif
+            power_off();
         }
     }
 
@@ -89,6 +104,11 @@ static void charge_on_timer(int signal)
     }
 
     int status = battery_get_status();
+
+    if (status == BATTERY_STATUS_NOT_CHARGING)
+    {
+        power_off();
+    }
 
 #ifdef CHARGE_ENABLE_SCREEN
     if (full == 0)
